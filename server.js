@@ -23,7 +23,7 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 }
 
-const API_ROUTES = ['/login', '/register', '/items', '/organizations', '/users', '/health']
+const API_ROUTES = ['/login', '/register', '/items', '/organizations', '/users', '/health', '/admin/users', '/admin/staff']
 
 const _sendFile = (res, statusCode, contentType, content) => {
   res.writeHead(statusCode, {
@@ -81,6 +81,7 @@ const _resolveFilePath = (pathname) => {
   if (['/session', '/session.html', '/sessao', '/sessao.html'].includes(pathname)) return path.join(process.cwd(), 'pages', 'session.html')
   if (['/user', '/user.html'].includes(pathname)) return path.join(process.cwd(), 'pages', 'user.html')
   if (['/admin', '/admin.html'].includes(pathname)) return path.join(process.cwd(), 'pages', 'admin.html')
+  if (['/staff', '/staff.html'].includes(pathname)) return path.join(process.cwd(), 'pages', 'staff.html')
 
   /* Check pages/ folder directly */
   if (pathname.startsWith('/pages/')) {

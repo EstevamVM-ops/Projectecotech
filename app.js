@@ -21,10 +21,6 @@ const _updateDeleteButtonState = () => {
   const bulkStatusBtn = $('#bulkStatusBtn')
   const bulkStatusSelect = $('#bulkStatusSelect')
   const selectAllBtn = $('#selectAllBtn')
-  const selectAllSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>`
-  const deselectAllSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>`
-  const partialSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="12" x2="16" y2="12"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>`
-  const trashSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`
 
   const count = selectedItemIds.size
 
@@ -101,6 +97,129 @@ const _setSelectedRow = (itemId) => {
 }
 let registeredOrganizations = []
 const STATUS_OPTIONS = ['Na organização', 'No IFTM UPT', 'Coletado pela Cooperu', 'Desmantelado']
+const STAFF_PERMS = ['items.view', 'items.create', 'items.status', 'items.delete', 'labels.print', 'reports.pdf', 'organizations.manage']
+const PERM_LABELS = {
+  'items.view': 'Ver aparelhos',
+  'items.create': 'Cadastrar aparelhos',
+  'items.status': 'Alterar status',
+  'items.delete': 'Excluir aparelhos',
+  'labels.print': 'Imprimir etiquetas',
+  'reports.pdf': 'Gerar relatório PDF',
+  'organizations.manage': 'Gerenciar organizações'
+}
+
+const _hasPerm = (perm) => {
+  const u = currentUser || {}
+
+  if (u.admin || u.role === 'admin') return true
+  if (u.role === 'staff') return Array.isArray(u.permissions) && u.permissions.includes(perm)
+
+  return perm === 'items.create' || perm === 'items.view'
+}
+
+const _canSelectRows = () => _hasPerm('items.delete') || _hasPerm('items.status') || _hasPerm('labels.print')
+
+const _roleLabel = (u) => (u.admin || u.role === 'admin' ? 'Administrador' : (u.role === 'staff' ? 'Funcionário' : 'Usuário'))
+
+    const selectAllSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>`
+    const deselectAllSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>`
+    const partialSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="12" x2="16" y2="12"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>`
+    const trashSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`
+
+const RECORDS_PER_PAGE = 10
+const ACCOUNTS_PER_PAGE = 10
+const STAFF_PER_PAGE = 10
+
+let currentRecordsPage = 1
+let currentAccountsPage = 1
+let currentStaffPage = 1
+
+const _chevronLeftSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>`
+const _chevronRightSvg = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>`
+
+const _renderPagination = (container, { currentPage, totalItems, pageSize, onPageChange, itemLabel = 'itens' }) => {
+  if (!container) return;
+
+  if (totalItems === 0) {
+    container.innerHTML = ''
+    container.hidden = true
+
+    return;
+  }
+
+  container.hidden = false
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+  const start = (currentPage - 1) * pageSize + 1
+  const end = Math.min(currentPage * pageSize, totalItems)
+
+  const infoHtml = `<span class="pagination-info">Mostrando <strong>${start}–${end}</strong> de <strong>${totalItems}</strong> ${itemLabel}</span>`
+
+  let pagesHtml = ''
+
+  if (totalPages <= 7) {
+    for (let p = 1; p <= totalPages; p += 1) {
+      pagesHtml += `<button class="pagination-page${p === currentPage ? ' active' : ''}" type="button" data-page="${p}" aria-label="Ir para página ${p}"${p === currentPage ? ' aria-current="page"' : ''}>${p}</button>`
+    }
+  } else {
+    const pages = [1]
+
+    if (currentPage > 3) pages.push('...')
+    const rangeStart = Math.max(2, currentPage - 1)
+    const rangeEnd = Math.min(totalPages - 1, currentPage + 1)
+
+    for (let p = rangeStart; p <= rangeEnd; p += 1) {
+      pages.push(p)
+    }
+
+    if (currentPage < totalPages - 2) pages.push('...')
+    pages.push(totalPages)
+
+    pages.forEach((p) => {
+      if (p === '...') {
+        pagesHtml += '<span class="pagination-ellipsis" aria-hidden="true">…</span>'
+      } else {
+        pagesHtml += `<button class="pagination-page${p === currentPage ? ' active' : ''}" type="button" data-page="${p}" aria-label="Ir para página ${p}"${p === currentPage ? ' aria-current="page"' : ''}>${p}</button>`
+      }
+    })
+  }
+
+  const prevDisabled = currentPage <= 1
+  const nextDisabled = currentPage >= totalPages
+
+  const controlsHtml = `
+    <div class="pagination-controls" role="navigation" aria-label="Navegação entre páginas">
+      <button class="pagination-btn icon-only" type="button" data-page-action="prev"${prevDisabled ? ' disabled' : ''} aria-label="Página anterior" title="Página anterior">${_chevronLeftSvg}</button>
+      <div class="pagination-pages">${pagesHtml}</div>
+      <button class="pagination-btn icon-only" type="button" data-page-action="next"${nextDisabled ? ' disabled' : ''} aria-label="Próxima página" title="Próxima página">${_chevronRightSvg}</button>
+    </div>`
+
+  container.innerHTML = `${infoHtml}${controlsHtml}`
+
+  const buttons = container.querySelectorAll('button[data-page], button[data-page-action]')
+
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault()
+      const targetPage = btn.getAttribute('data-page')
+      const action = btn.getAttribute('data-page-action')
+
+      if (targetPage) {
+        const pageNum = Number(targetPage)
+
+        if (pageNum !== currentPage) onPageChange(pageNum)
+      } else if (action === 'prev' && currentPage > 1) {
+        onPageChange(currentPage - 1)
+      } else if (action === 'next' && currentPage < totalPages) {
+        onPageChange(currentPage + 1)
+      }
+    })
+  })
+}
+
+let selectedAccountIds = new Set()
+let lastAccounts = []
+
+let accessDenied = false
 let serverDown = false
 let authToken = sessionStorage.getItem('authToken') || null
 let currentUser = null
@@ -216,6 +335,12 @@ const _openFullscreenQr = (item) => {
 
 /* INFO: Server-side organization deletion with product dependency check */
 const _deleteOrganization = async (organizationObj, targetBtn) => {
+  if (!_hasPerm('organizations.manage')) {
+    _showToast('Sem permissão para gerenciar organizações.', 'error')
+
+    return;
+  }
+
   const name = typeof organizationObj === 'string' ? organizationObj : organizationObj.name
   const id = typeof organizationObj === 'object' ? organizationObj.id : null
 
@@ -228,7 +353,10 @@ const _deleteOrganization = async (organizationObj, targetBtn) => {
     const url = id ? `${SERVER_URL}/organizations/${id}` : `${SERVER_URL}/organizations/delete`
     const res = await globalThis.fetch(url, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+      },
       body: JSON.stringify({ id, name })
     })
 
@@ -540,7 +668,7 @@ const _render = () => {
 
   if (serverDown) {
     Object.values(metricEls).forEach((el) => {
-      if (el) el.textContent = 'Servidor offline'
+      if (el) el.textContent = accessDenied ? 'Sem permissão' : 'Servidor offline'
     })
 
     ;['#organizationRanking', '#classRanking', '#studentRanking'].forEach((sel) => {
@@ -549,7 +677,23 @@ const _render = () => {
       if (el) el.innerHTML = '<li class="empty-state"><div class="empty-title">Servidor offline</div><p class="empty-text">Não foi possível carregar o ranking.</p></li>'
     })
 
-    if (recordsTable) recordsTable.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger); font-weight: 600; padding: 1.5rem;">Servidor offline. Não foi possível conectar ao backend.</td></tr>`
+    if (recordsTable) recordsTable.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger); font-weight: 600; padding: 1.5rem;">${accessDenied ? 'Sem permissão para visualizar aparelhos.' : 'Servidor offline. Não foi possível conectar ao backend.'}</td></tr>`
+
+    const recordsPaginationEl = $('#recordsPagination')
+    if (recordsPaginationEl) recordsPaginationEl.innerHTML = ''
+
+    return;
+  }
+
+  if (accessDenied) {
+    Object.values(metricEls).forEach((el) => {
+      if (el) el.textContent = 'Sem permissão'
+    })
+
+    if (recordsTable) recordsTable.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger); font-weight: 600; padding: 1.5rem;">Sem permissão para visualizar aparelhos.</td></tr>`
+
+    const recordsPaginationEl = $('#recordsPagination')
+    if (recordsPaginationEl) recordsPaginationEl.innerHTML = ''
 
     return;
   }
@@ -620,10 +764,27 @@ const _render = () => {
 
   if (recordsTable) recordsTable.innerHTML = ''
 
+  const recordsPaginationEl = $('#recordsPagination')
+
   if (recordsTable && !records.length) {
     recordsTable.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-secondary);">Nenhum aparelho cadastrado no momento. Use o formulário acima para registrar o primeiro item.</td></tr>`
+    _renderPagination(recordsPaginationEl, {
+      currentPage: 1,
+      totalItems: 0,
+      pageSize: RECORDS_PER_PAGE,
+      onPageChange: () => {},
+      itemLabel: 'aparelhos'
+    })
   } else if (recordsTable) {
-    records.forEach((item) => {
+    const totalRecordsPages = Math.max(1, Math.ceil(records.length / RECORDS_PER_PAGE))
+
+    if (currentRecordsPage > totalRecordsPages) currentRecordsPage = totalRecordsPages
+    if (currentRecordsPage < 1) currentRecordsPage = 1
+
+    const startIndex = (currentRecordsPage - 1) * RECORDS_PER_PAGE
+    const pageRecords = records.slice(startIndex, startIndex + RECORDS_PER_PAGE)
+
+    pageRecords.forEach((item) => {
       const tr = document.createElement('tr')
       const statusClass = _getStatusClass(item.status)
       const isSelected = selectedItemIds.has(item.id)
@@ -637,7 +798,7 @@ const _render = () => {
         <td data-label="Peso"><strong>${Number(item.weight).toFixed(2)} kg</strong></td>
         <td data-label="Organização">${_escapeHtml(item.organization)}</td>
         <td data-label="Aluno">${_escapeHtml(item.student)}</td>
-        <td data-label="Status"><select class="status-badge status-select ${statusClass}" data-id="${_escapeHtml(item.id)}" aria-label="Alterar status do aparelho">${STATUS_OPTIONS.map((opt) => `<option value="${_escapeHtml(opt)}"${opt === item.status ? ' selected' : ''}>${_escapeHtml(opt)}</option>`).join('')}</select></td>
+        ${_hasPerm('items.status') ? `<td data-label="Status"><select class="status-badge status-select ${statusClass}" data-id="${_escapeHtml(item.id)}" aria-label="Alterar status do aparelho">${STATUS_OPTIONS.map((opt) => `<option value="${_escapeHtml(opt)}"${opt === item.status ? ' selected' : ''}>${_escapeHtml(opt)}</option>`).join('')}</select></td>` : `<td data-label="Status"><span class="status-badge ${statusClass}">${_escapeHtml(item.status)}</span></td>`}
         <td data-label="QR" class="qr-cell" role="button" tabindex="0" title="Clique para visualizar QR Code em tela cheia" style="text-align: center; vertical-align: middle;"></td>`
 
       recordsTable.appendChild(tr)
@@ -660,12 +821,24 @@ const _render = () => {
       }
     })
 
+    _renderPagination(recordsPaginationEl, {
+      currentPage: currentRecordsPage,
+      totalItems: records.length,
+      pageSize: RECORDS_PER_PAGE,
+      onPageChange: (newPage) => {
+        currentRecordsPage = newPage
+        _render()
+        _updateDeleteButtonState()
+      },
+      itemLabel: 'aparelhos'
+    })
+
     if (!recordsTable._hasSelectListener) {
       recordsTable._hasSelectListener = true
       recordsTable.addEventListener('click', (e) => {
         const tr = e.target.closest('tr.selectable-row')
 
-        if (tr && !e.target.closest('.qr-cell') && !e.target.closest('select')) {
+        if (tr && !e.target.closest('.qr-cell') && !e.target.closest('select') && _canSelectRows()) {
           const itemId = tr.getAttribute('data-id')
 
           _setSelectedRow(itemId)
@@ -683,6 +856,12 @@ const _render = () => {
         }
       })
     }
+  }
+
+  if (recordsTable) {
+    const recordsTableEl = recordsTable.closest('table')
+
+    if (recordsTableEl) recordsTableEl.classList.toggle('no-select', !_canSelectRows())
   }
 
   _renderStudentPortal()
@@ -712,6 +891,10 @@ const _fetchRecords = async () => {
       } else {
         records = []
       }
+    } else if (res.status === 403) {
+      serverDown = false
+      accessDenied = true
+      records = []
     } else {
       serverDown = true
       records = []
@@ -803,6 +986,12 @@ if (organizationForm) {
   organizationForm.addEventListener('submit', async (event) => {
     event.preventDefault()
 
+    if (!_hasPerm('organizations.manage')) {
+      _showToast('Sem permissão para gerenciar organizações.', 'error')
+
+      return;
+    }
+
     const nameInput = $('#newOrganizationName')
     const organizationName = nameInput ? nameInput.value.trim() : ''
 
@@ -819,7 +1008,10 @@ if (organizationForm) {
     try {
       const res = await globalThis.fetch(`${SERVER_URL}/organizations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
         body: JSON.stringify({ name: organizationName, city: 'Uberaba' })
       })
 
@@ -992,6 +1184,9 @@ if (loginForm) {
         if (currentUser.admin || currentUser.role === 'admin') {
           _showToast(`Bem-vindo(a) Administrador(a), ${displayName}!`, 'success')
           window.location.href = 'admin.html'
+        } else if (currentUser.role === 'staff') {
+          _showToast(`Bem-vindo(a), ${displayName}!`, 'success')
+          window.location.href = 'staff.html'
         } else {
           _showToast(`Bem-vindo(a), ${displayName}!`, 'success')
           window.location.href = 'user.html'
@@ -1038,6 +1233,12 @@ if ($('#studentLogoutButtonNav')) $('#studentLogoutButtonNav').addEventListener(
 if (recordForm) {
   recordForm.addEventListener('submit', async (event) => {
     event.preventDefault()
+
+    if (!_hasPerm('items.create')) {
+      _showToast('Sem permissão para cadastrar aparelhos.', 'error')
+
+      return;
+    }
 
     const submitBtn = recordForm.querySelector('button[type="submit"]')
     const textInputs = [$('#device'), $('#organization'), $('#student')].filter(Boolean)
@@ -1232,6 +1433,12 @@ const _getQrDataUrl = (text) => {
 }
 
 const _exportPdf = () => {
+  if (!_hasPerm('reports.pdf')) {
+    _showToast('Sem permissão para gerar relatório PDF.', 'error')
+
+    return;
+  }
+
   if (!window.jspdf) {
     alert('Biblioteca PDF indisponível. Use a impressão do navegador como alternativa.')
     window.print()
@@ -1513,6 +1720,12 @@ const _exportPdf = () => {
 
 
 const _printQrLabels = () => {
+  if (!_hasPerm('labels.print')) {
+    _showToast('Sem permissão para imprimir etiquetas.', 'error')
+
+    return;
+  }
+
   const itemsToPrint = selectedItemIds.size > 0
     ? records.filter((item) => selectedItemIds.has(item.id))
     : records
@@ -1551,6 +1764,12 @@ const _printQrLabels = () => {
 }
 
 const _toggleSelectAll = () => {
+  if (!_canSelectRows()) {
+    _showToast('Sem permissão para selecionar aparelhos.', 'error')
+
+    return;
+  }
+
   const allRecords = (typeof records === 'undefined' || !Array.isArray(records)) ? [] : records
 
   if (allRecords.length > 0 && selectedItemIds.size === allRecords.length) {
@@ -1563,8 +1782,394 @@ const _toggleSelectAll = () => {
   _updateDeleteButtonState()
 }
 
+/* INFO: Permission-aware UI (staff dashboard restrictions + page guards) */
+const _applyPermissions = () => {
+  const adminAreaEl = $('#adminArea')
+  const staffAreaEl = $('#staffArea')
+
+  if (currentUser && currentUser.role === 'staff' && !currentUser.admin && !staffAreaEl && adminAreaEl && !adminAreaEl.classList.contains('hidden')) {
+    window.location.replace('staff.html')
+
+    return;
+  }
+
+  if (recordForm) {
+    const recordCard = recordForm.closest('div')
+
+    if (recordCard) recordCard.hidden = !_hasPerm('items.create')
+  }
+
+  if (organizationForm) {
+    const orgCard = organizationForm.closest('div')
+
+    if (orgCard) orgCard.hidden = !_hasPerm('organizations.manage')
+  }
+
+  const printBtn = $('#printLabels')
+  const pdfBtn = $('#exportPdf')
+  const showPrint = _hasPerm('labels.print')
+  const showPdf = _hasPerm('reports.pdf')
+
+  if (printBtn && !showPrint) printBtn.hidden = true
+  if (pdfBtn && !showPdf) pdfBtn.hidden = true
+
+  if (!showPrint && !showPdf && printBtn) {
+    const printGroup = printBtn.closest('.split-button')
+
+    if (printGroup) printGroup.hidden = true
+  }
+
+  const deleteBtn = $('#deleteSelectedBtn')
+
+  if (deleteBtn && !_hasPerm('items.delete')) deleteBtn.hidden = true
+
+  const selectAllBtn = $('#selectAllBtn')
+
+  if (selectAllBtn && !_canSelectRows()) selectAllBtn.hidden = true
+
+  const bulkBtn = $('#bulkStatusBtn')
+
+  if (bulkBtn && !_hasPerm('items.status')) {
+    const bulkGroup = bulkBtn.closest('.split-button')
+
+    if (bulkGroup) bulkGroup.hidden = true
+  }
+}
+
+const _updateAccountButtonState = () => {
+  const delBtn = $('#deleteSelectedAccountsBtn')
+  const allBtn = $('#selectAllAccountsBtn')
+  const selfId = currentUser && currentUser.id
+  const selectable = lastAccounts.filter((u) => u.id !== selfId)
+  const count = selectedAccountIds.size
+  const allSelected = selectable.length > 0 && selectable.every((u) => selectedAccountIds.has(u.id))
+
+  if (delBtn) {
+    delBtn.disabled = count === 0
+    delBtn.style.opacity = count === 0 ? '0.5' : '1'
+    delBtn.style.cursor = count === 0 ? 'not-allowed' : 'pointer'
+    delBtn.innerHTML = count > 1 ? `${trashSvg}<span>(${count})</span>` : trashSvg
+  }
+
+  if (allBtn) {
+    allBtn.disabled = selectable.length === 0
+    allBtn.style.opacity = selectable.length === 0 ? '0.5' : '1'
+    allBtn.style.cursor = selectable.length === 0 ? 'not-allowed' : 'pointer'
+    allBtn.innerHTML = allSelected ? deselectAllSvg : (count > 0 ? partialSvg : selectAllSvg)
+    allBtn.setAttribute('aria-label', allSelected ? 'Desmarcar todas' : 'Selecionar todas')
+    allBtn.setAttribute('title', allSelected ? 'Desmarcar todas' : 'Selecionar todas')
+  }
+}
+
+const _toggleSelectAllAccounts = () => {
+  const selfId = currentUser && currentUser.id
+  const selectable = lastAccounts.filter((u) => u.id !== selfId)
+
+  if (selectable.length === 0) return;
+
+  if (selectable.every((u) => selectedAccountIds.has(u.id))) selectedAccountIds.clear()
+  else selectable.forEach((u) => selectedAccountIds.add(u.id))
+
+  _renderAccounts(lastAccounts)
+}
+
+const _deleteSelectedAccounts = async () => {
+  if (selectedAccountIds.size === 0) return;
+
+  const ids = Array.from(selectedAccountIds)
+  let deleted = 0
+
+  for (const id of ids) {
+    try {
+      const res = await globalThis.fetch(`${SERVER_URL}/admin/users/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        }
+      })
+
+      if (res.ok) deleted += 1
+    } catch (err) {
+      console.warn('Failed to bulk delete account:', err)
+    }
+  }
+
+  selectedAccountIds.clear()
+  await _fetchAccounts()
+
+  if (deleted === ids.length) _showToast(`${deleted} conta(s) excluída(s) com sucesso!`, 'success')
+  else if (deleted === 0) _showToast('Não foi possível excluir as contas selecionadas.', 'error')
+  else _showToast(`${deleted} de ${ids.length} conta(s) excluída(s).`, 'warning')
+}
+
+/* INFO: Account & staff management (admin page) */
+const _staffPermCheckboxes = (selected) => STAFF_PERMS.map((p) => `<label class="perm-check"><input type="checkbox" value="${p}"${selected.includes(p) ? ' checked' : ''} />${PERM_LABELS[p]}</label>`).join('')
+
+const _renderAccounts = (users) => {
+  const accountsTable = $('#accountsTable')
+
+  if (accountsTable) {
+    const selfId = currentUser && currentUser.id
+
+    lastAccounts = users
+
+    const totalAccountsPages = Math.max(1, Math.ceil(users.length / ACCOUNTS_PER_PAGE))
+
+    if (currentAccountsPage > totalAccountsPages) currentAccountsPage = totalAccountsPages
+    if (currentAccountsPage < 1) currentAccountsPage = 1
+
+    if (!users.length) {
+      accountsTable.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-secondary);">Nenhuma conta cadastrada.</td></tr>'
+      _renderPagination($('#accountsPagination'), {
+        currentPage: 1,
+        totalItems: 0,
+        pageSize: ACCOUNTS_PER_PAGE,
+        onPageChange: () => {},
+        itemLabel: 'contas'
+      })
+    } else {
+      const startIndex = (currentAccountsPage - 1) * ACCOUNTS_PER_PAGE
+      const pageUsers = users.slice(startIndex, startIndex + ACCOUNTS_PER_PAGE)
+
+      accountsTable.innerHTML = pageUsers.map((u) => {
+        const isSelf = u.id === selfId
+
+        return `
+        <tr>
+          <td data-label="Selecionar" class="select-cell">${isSelf ? '' : `<input type="checkbox" class="row-select" data-account-check="${u.id}"${selectedAccountIds.has(u.id) ? ' checked' : ''} aria-label="Selecionar conta" />`}</td>
+          <td data-label="Nome"><strong>${_escapeHtml(u.full_name || u.username)}</strong></td>
+          <td data-label="Usuário">${_escapeHtml(u.username)}</td>
+          <td data-label="Organização">${_escapeHtml(u.organization || '-')}</td>
+          <td data-label="Permissões">${u.role === 'staff' && !u.admin ? (u.permissions.length > 0 ? u.permissions.map((p) => _escapeHtml(PERM_LABELS[p] || p)).join(', ') : 'Nenhuma') : '<span class="muted-text">—</span>'}</td>
+          <td data-label="Ações" style="text-align: center;">${isSelf ? '<span class="muted-text">Sua conta</span>' : `<button class="button danger" type="button" data-delete-account="${u.id}">Excluir</button>`}</td>
+        </tr>`}).join('')
+
+      _renderPagination($('#accountsPagination'), {
+        currentPage: currentAccountsPage,
+        totalItems: users.length,
+        pageSize: ACCOUNTS_PER_PAGE,
+        onPageChange: (newPage) => {
+          currentAccountsPage = newPage
+          _renderAccounts(lastAccounts)
+        },
+        itemLabel: 'contas'
+      })
+    }
+
+    _updateAccountButtonState()
+  }
+
+  const staffTable = $('#staffTable')
+
+  if (staffTable) {
+    const staff = users.filter((u) => u.role === 'staff' && !u.admin)
+    const totalStaffPages = Math.max(1, Math.ceil(staff.length / STAFF_PER_PAGE))
+
+    if (currentStaffPage > totalStaffPages) currentStaffPage = totalStaffPages
+    if (currentStaffPage < 1) currentStaffPage = 1
+
+    if (!staff.length) {
+      staffTable.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-secondary);">Nenhum funcionário cadastrado.</td></tr>'
+      _renderPagination($('#staffPagination'), {
+        currentPage: 1,
+        totalItems: 0,
+        pageSize: STAFF_PER_PAGE,
+        onPageChange: () => {},
+        itemLabel: 'funcionários'
+      })
+    } else {
+      const startStaff = (currentStaffPage - 1) * STAFF_PER_PAGE
+      const pageStaff = staff.slice(startStaff, startStaff + STAFF_PER_PAGE)
+
+      staffTable.innerHTML = pageStaff.map((u) => `
+        <tr>
+          <td data-label="Nome"><strong>${_escapeHtml(u.full_name || u.username)}</strong></td>
+          <td data-label="Usuário">${_escapeHtml(u.username)}</td>
+          <td data-label="Permissões">${u.permissions.length > 0 ? u.permissions.map((p) => _escapeHtml(PERM_LABELS[p] || p)).join(', ') : 'Nenhuma'}</td>
+          <td data-label="Situação">${u.active ? 'Ativo' : 'Inativo'}</td>
+          <td data-label="Ações" style="text-align: center; white-space: nowrap;">
+            <button class="button secondary" type="button" data-manage-staff="${u.id}">Gerenciar</button>
+            <button class="button danger" type="button" data-delete-account="${u.id}">Excluir</button>
+          </td>
+        </tr>
+        <tr class="staff-editor" data-staff-editor="${u.id}" hidden>
+          <td colspan="5">
+            <div class="perm-grid">${_staffPermCheckboxes(u.permissions)}</div>
+            <label class="perm-check"><input type="checkbox" data-staff-active${u.active ? ' checked' : ''} />Conta ativa</label>
+            <div class="staff-editor-actions">
+              <button class="button primary" type="button" data-save-staff="${u.id}">Salvar</button>
+              <button class="button secondary" type="button" data-cancel-staff="${u.id}">Cancelar</button>
+            </div>
+          </td>
+        </tr>`).join('')
+
+      _renderPagination($('#staffPagination'), {
+        currentPage: currentStaffPage,
+        totalItems: staff.length,
+        pageSize: STAFF_PER_PAGE,
+        onPageChange: (newPage) => {
+          currentStaffPage = newPage
+          _renderAccounts(lastAccounts)
+        },
+        itemLabel: 'funcionários'
+      })
+    }
+  }
+}
+
+const _fetchAccounts = async () => {
+  if (!$('#accountsTable') && !$('#staffTable')) return;
+
+  try {
+    const res = await globalThis.fetch(`${SERVER_URL}/admin/users`, {
+      headers: { ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}) }
+    })
+
+    if (!res.ok) throw new Error('fetch failed')
+
+    const data = await res.json()
+
+    _renderAccounts(Array.isArray(data.users) ? data.users : [])
+  } catch (err) {
+    console.warn('Could not fetch accounts:', err)
+    _showToast('Não foi possível carregar as contas.', 'error')
+  }
+}
+
+const _deleteAccount = async (id, btn) => {
+  if (btn) btn.disabled = true
+
+  try {
+    const res = await globalThis.fetch(`${SERVER_URL}/admin/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+      }
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok) {
+      _showToast(data.error || 'Erro ao excluir conta.', 'error')
+
+      return;
+    }
+
+    selectedAccountIds.delete(Number(id))
+    _showToast(data.message || 'Conta excluída com sucesso!', 'success')
+    await _fetchAccounts()
+  } catch (err) {
+    console.warn('Failed to delete account:', err)
+    _showToast('Servidor offline. Não foi possível excluir a conta.', 'error')
+  } finally {
+    if (btn) btn.disabled = false
+  }
+}
+
+const _bindAccountTables = () => {
+  const accountsTable = $('#accountsTable')
+
+  if (accountsTable && !accountsTable._hasAccountListener) {
+    accountsTable._hasAccountListener = true
+    accountsTable.addEventListener('click', (e) => {
+      const box = e.target.closest('[data-account-check]')
+
+      if (box) {
+        const accountId = Number(box.getAttribute('data-account-check'))
+
+        if (box.checked) selectedAccountIds.add(accountId)
+        else selectedAccountIds.delete(accountId)
+
+        _updateAccountButtonState()
+
+        return;
+      }
+
+      const btn = e.target.closest('[data-delete-account]')
+
+      if (btn) _deleteAccount(btn.getAttribute('data-delete-account'), btn)
+    })
+  }
+
+  const staffTable = $('#staffTable')
+
+  if (staffTable && !staffTable._hasStaffListener) {
+    staffTable._hasStaffListener = true
+    staffTable.addEventListener('click', async (e) => {
+      const manageBtn = e.target.closest('[data-manage-staff]')
+      const saveBtn = e.target.closest('[data-save-staff]')
+      const cancelBtn = e.target.closest('[data-cancel-staff]')
+      const deleteBtn = e.target.closest('[data-delete-account]')
+
+      if (manageBtn) {
+        const editor = staffTable.querySelector(`[data-staff-editor="${manageBtn.getAttribute('data-manage-staff')}"]`)
+
+        if (editor) editor.hidden = !editor.hidden
+
+        return;
+      }
+
+      if (cancelBtn) {
+        const editor = staffTable.querySelector(`[data-staff-editor="${cancelBtn.getAttribute('data-cancel-staff')}"]`)
+
+        if (editor) editor.hidden = true
+
+        return;
+      }
+
+      if (saveBtn) {
+        const id = saveBtn.getAttribute('data-save-staff')
+        const editor = staffTable.querySelector(`[data-staff-editor="${id}"]`)
+        const perms = editor ? Array.from(editor.querySelectorAll('.perm-grid input[type="checkbox"]:checked')).map((c) => c.value) : []
+        const activeBox = editor ? editor.querySelector('[data-staff-active]') : null
+
+        saveBtn.disabled = true
+
+        try {
+          const res = await globalThis.fetch(`${SERVER_URL}/admin/staff/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+            },
+            body: JSON.stringify({ permissions: perms, active: activeBox ? activeBox.checked : true })
+          })
+
+          const data = await res.json().catch(() => ({}))
+
+          if (!res.ok) {
+            _showToast(data.error || 'Erro ao atualizar funcionário.', 'error')
+
+            return;
+          }
+
+          _showToast(data.message || 'Funcionário atualizado com sucesso!', 'success')
+          await _fetchAccounts()
+        } catch (err) {
+          console.warn('Failed to update staff:', err)
+          _showToast('Servidor offline. Não foi possível atualizar.', 'error')
+        } finally {
+          saveBtn.disabled = false
+        }
+
+        return;
+      }
+
+      if (deleteBtn) _deleteAccount(deleteBtn.getAttribute('data-delete-account'), deleteBtn)
+    })
+  }
+}
+
 /* INFO: Single & bulk product status updates (admin only) */
 const _setItemStatus = async (id, state, selectEl) => {
+  if (!_hasPerm('items.status')) {
+    _showToast('Sem permissão para alterar o status.', 'error')
+
+    return;
+  }
+
   if (selectEl) selectEl.disabled = true
 
   try {
@@ -1602,6 +2207,12 @@ const _setItemStatus = async (id, state, selectEl) => {
 
 const _applyBulkStatus = async () => {
   if (selectedItemIds.size === 0) return;
+
+  if (!_hasPerm('items.status')) {
+    _showToast('Sem permissão para alterar o status.', 'error')
+
+    return;
+  }
 
   const bulkSelect = $('#bulkStatusSelect')
   const state = bulkSelect ? bulkSelect.value : ''
@@ -1655,6 +2266,12 @@ if ($('#printLabels')) $('#printLabels').addEventListener('click', _printQrLabel
 if ($('#deleteSelectedBtn')) {
   $('#deleteSelectedBtn').addEventListener('click', async () => {
     if (selectedItemIds.size === 0) return;
+
+    if (!_hasPerm('items.delete')) {
+      _showToast('Sem permissão para excluir aparelhos.', 'error')
+
+      return;
+    }
 
     const count = selectedItemIds.size
     const confirmMsg = count === 1
@@ -1715,6 +2332,7 @@ if ($('#btnStudentMilestones')) {
   })
 }
 
+_applyPermissions()
 _fetchOrganizations()
 _fetchRecords()
 
@@ -1732,6 +2350,64 @@ if (bulkStatusSelect) {
 
 if ($('#bulkStatusBtn')) $('#bulkStatusBtn').addEventListener('click', _applyBulkStatus)
 if ($('#selectAllBtn')) $('#selectAllBtn').addEventListener('click', _toggleSelectAll)
+if ($('#selectAllAccountsBtn')) $('#selectAllAccountsBtn').addEventListener('click', _toggleSelectAllAccounts)
+if ($('#deleteSelectedAccountsBtn')) $('#deleteSelectedAccountsBtn').addEventListener('click', _deleteSelectedAccounts)
+
+_applyPermissions()
+_bindAccountTables()
+_fetchAccounts()
+
+/* INFO: Staff creation + bulk account deletion (admin page) */
+const staffForm = $('#staffForm')
+
+if (staffForm) {
+  const permBox = $('#staffPerms')
+
+  if (permBox) permBox.innerHTML = _staffPermCheckboxes([])
+
+  staffForm.addEventListener('submit', async (event) => {
+    event.preventDefault()
+
+    const perms = Array.from(staffForm.querySelectorAll('.perm-grid input[type="checkbox"]:checked')).map((c) => c.value)
+    const submitBtn = staffForm.querySelector('button[type="submit"]')
+
+    if (submitBtn) submitBtn.disabled = true
+
+    try {
+      const res = await globalThis.fetch(`${SERVER_URL}/admin/staff`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({
+          full_name: $('#staffName') ? $('#staffName').value.trim() : '',
+          username: $('#staffEmail') ? $('#staffEmail').value.trim() : '',
+          password: $('#staffPassword') ? $('#staffPassword').value : '',
+          organization: $('#staffOrg') ? $('#staffOrg').value.trim() : '',
+          permissions: perms
+        })
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        _showToast(data.error || 'Erro ao criar funcionário.', 'error')
+
+        return;
+      }
+
+      _showToast(data.message || 'Funcionário criado com sucesso!', 'success')
+      staffForm.reset()
+      await _fetchAccounts()
+    } catch (err) {
+      console.warn('Failed to create staff:', err)
+      _showToast('Servidor offline. Não foi possível criar o funcionário.', 'error')
+    } finally {
+      if (submitBtn) submitBtn.disabled = false
+    }
+  })
+}
 
 
 /* INFO: INTERACTIVE MAP & COLLECTION POINTS */
