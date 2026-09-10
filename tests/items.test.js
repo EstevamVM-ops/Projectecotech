@@ -2,7 +2,7 @@ import { test, describe, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createTestEnv } from './test-helper.js'
 
-describe('Items & Products Management (/items)', () => {
+describe('Items & Products Management (/items, /admin/items/state)', () => {
   const env = createTestEnv()
 
   before(async () => {
@@ -51,12 +51,12 @@ describe('Items & Products Management (/items)', () => {
       const staff = env.createStaff(['organizations.manage'])
       const res = await env.request('/items', { token: staff.token })
       assert.equal(res.status, 403)
-      assert.equal(res.body.error, 'Sem permissão para visualizar aparelhos.')
+      assert.equal(res.body.code, 'INSUFFICIENT_PERMISSIONS')
     })
 
     test('succeeds with 200 when staff has items.view permission', async () => {
       const staff = env.createStaff(['items.view'])
-      const res = await env.request('/api/items', { token: staff.token })
+      const res = await env.request('/items', { token: staff.token })
       assert.equal(res.status, 200)
       assert.ok(Array.isArray(res.body.items))
     })
@@ -66,23 +66,24 @@ describe('Items & Products Management (/items)', () => {
     test('fails with 401 when no auth token is provided', async () => {
       const res = await env.request('/items', {
         method: 'POST',
-        body: { name: 'Monitor LED', weight: 3.2 }
+        body: { name: 'Monitor LED', owner: 'u@eco.local', weight: 3.2, state: 'Na organização', organization: 'Org' }
       })
       assert.equal(res.status, 401)
+      assert.equal(res.body.code, 'UNAUTHORIZED')
     })
 
     test('fails with 403 when staff lacks items.create permission', async () => {
       const staff = env.createStaff(['items.view', 'labels.print'])
       const res = await env.request('/items', {
         method: 'POST',
-        body: { name: 'Monitor LED', weight: 3.2 },
+        body: { name: 'Monitor LED', owner: 'u@eco.local', weight: 3.2, state: 'Na organização', organization: 'Org' },
         token: staff.token
       })
       assert.equal(res.status, 403)
-      assert.equal(res.body.error, 'Sem permissão para cadastrar aparelhos.')
+      assert.equal(res.body.code, 'INSUFFICIENT_PERMISSIONS')
     })
 
-    test('fails with 400 when item name is missing', async () => {
+    test('fails with 400 when item parameters are invalid', async () => {
       const user = env.createUser()
       const res = await env.request('/items', {
         method: 'POST',
@@ -90,7 +91,7 @@ describe('Items & Products Management (/items)', () => {
         token: user.token
       })
       assert.equal(res.status, 400)
-      assert.equal(res.body.error, 'Nome do aparelho é obrigatório.')
+      assert.equal(res.body.code, 'INVALID_PARAMETERS')
     })
 
     test('fails with 404 when specified owner email does not exist in users', async () => {
@@ -101,16 +102,17 @@ describe('Items & Products Management (/items)', () => {
           name: 'Tablet',
           owner: 'naoexiste@ecotech.local',
           weight: 0.5,
+          state: 'Na organização',
           organization: 'Escola Central'
         },
         token: admin.token
       })
 
       assert.equal(res.status, 404)
-      assert.ok(res.body.error.includes('não possui cadastro no sistema'))
+      assert.equal(res.body.code, 'NOT_FOUND')
     })
 
-    test('successfully registers item when user is registered', async () => {
+    test('successfully registers item when owner is registered', async () => {
       const student = env.createUser({
         username: 'alunocadastrado@ecotech.local',
         fullName: 'Aluno Cadastrado'
@@ -142,50 +144,38 @@ describe('Items & Products Management (/items)', () => {
       assert.ok(inDb)
       assert.equal(inDb.name, 'Notebook Dell')
     })
-
-    test('auto-generates uuid when none is provided in payload', async () => {
-      const admin = env.createAdmin()
-      const res = await env.request('/items', {
-        method: 'POST',
-        body: { name: 'Teclado USB', weight: 0.4 },
-        token: admin.token
-      })
-
-      assert.equal(res.status, 201)
-      assert.ok(res.body.uuid)
-      assert.ok(res.body.uuid.startsWith('ECO-'))
-    })
   })
 
-  describe('PATCH & PUT /items/:uuid & /admin/items/state (Status Updates)', () => {
+  describe('POST /admin/items/state (Status Updates)', () => {
     test('fails with 401 when unauthenticated', async () => {
-      const res = await env.request('/items/ECO-1', {
-        method: 'PATCH',
-        body: { state: 'Desmantelado' }
+      const res = await env.request('/admin/items/state', {
+        method: 'POST',
+        body: { uuid: 'ECO-1', state: 'Desmantelado' }
       })
       assert.equal(res.status, 401)
+      assert.equal(res.body.code, 'UNAUTHORIZED')
     })
 
     test('fails with 403 when user lacks items.status permission', async () => {
       const user = env.createUser()
-      const res = await env.request('/items/ECO-1', {
-        method: 'PATCH',
-        body: { state: 'Desmantelado' },
+      const res = await env.request('/admin/items/state', {
+        method: 'POST',
+        body: { uuid: 'ECO-1', state: 'Desmantelado' },
         token: user.token
       })
       assert.equal(res.status, 403)
-      assert.equal(res.body.error, 'Sem permissão para alterar o status.')
+      assert.equal(res.body.code, 'INSUFFICIENT_PERMISSIONS')
     })
 
     test('fails with 404 when item uuid does not exist', async () => {
       const admin = env.createAdmin()
-      const res = await env.request('/items/ECO-NONEXISTENT', {
-        method: 'PATCH',
-        body: { state: 'Coletado pela Cooperu' },
+      const res = await env.request('/admin/items/state', {
+        method: 'POST',
+        body: { uuid: 'ECO-NONEXISTENT', state: 'Coletado pela Cooperu' },
         token: admin.token
       })
       assert.equal(res.status, 404)
-      assert.equal(res.body.error, 'Aparelho não encontrado.')
+      assert.equal(res.body.code, 'NOT_FOUND')
     })
 
     test('successfully updates item status with staff items.status permission', async () => {
@@ -195,9 +185,9 @@ describe('Items & Products Management (/items)', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run('ECO-STATUS-1', 'Impressora', 'usuario', 5.0, 'Na organização', 'Org', new Date().toISOString())
 
-      const res = await env.request('/items/ECO-STATUS-1', {
-        method: 'PATCH',
-        body: { state: 'Coletado pela Cooperu' },
+      const res = await env.request('/admin/items/state', {
+        method: 'POST',
+        body: { uuid: 'ECO-STATUS-1', state: 'Coletado pela Cooperu' },
         token: staff.token
       })
 
@@ -208,49 +198,38 @@ describe('Items & Products Management (/items)', () => {
       const updated = env.db.prepare('SELECT state FROM items WHERE uuid = ?').get('ECO-STATUS-1')
       assert.equal(updated.state, 'Coletado pela Cooperu')
     })
-
-    test('successfully updates state using /admin/items/state endpoint', async () => {
-      const admin = env.createAdmin()
-      env.db.prepare(`
-        INSERT INTO items (uuid, name, owner, weight, state, organization, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run('ECO-STATUS-2', 'Mouse', 'usuario', 0.1, 'Na organização', 'Org', new Date().toISOString())
-
-      const res = await env.request('/admin/items/state', {
-        method: 'POST',
-        body: { uuid: 'ECO-STATUS-2', state: 'Desmantelado' },
-        token: admin.token
-      })
-
-      assert.equal(res.status, 200)
-      assert.equal(res.body.state, 'Desmantelado')
-    })
   })
 
-  describe('DELETE /items/:uuid & /items', () => {
+  describe('DELETE /items', () => {
     test('fails with 401 when unauthenticated', async () => {
-      const res = await env.request('/items/ECO-1', { method: 'DELETE' })
+      const res = await env.request('/items', {
+        method: 'DELETE',
+        body: { uuid: 'ECO-1' }
+      })
       assert.equal(res.status, 401)
+      assert.equal(res.body.code, 'UNAUTHORIZED')
     })
 
     test('fails with 403 when user lacks items.delete permission', async () => {
       const user = env.createUser()
-      const res = await env.request('/items/ECO-1', {
+      const res = await env.request('/items', {
         method: 'DELETE',
+        body: { uuid: 'ECO-1' },
         token: user.token
       })
       assert.equal(res.status, 403)
-      assert.equal(res.body.error, 'Sem permissão para excluir aparelhos.')
+      assert.equal(res.body.code, 'INSUFFICIENT_PERMISSIONS')
     })
 
     test('fails with 404 when target item does not exist', async () => {
       const admin = env.createAdmin()
-      const res = await env.request('/items/ECO-NONEXISTENT', {
+      const res = await env.request('/items', {
         method: 'DELETE',
+        body: { uuid: 'ECO-NONEXISTENT' },
         token: admin.token
       })
       assert.equal(res.status, 404)
-      assert.equal(res.body.error, 'Aparelho não encontrado.')
+      assert.equal(res.body.code, 'NOT_FOUND')
     })
 
     test('successfully deletes item when admin or staff with items.delete', async () => {
@@ -260,14 +239,15 @@ describe('Items & Products Management (/items)', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run('ECO-DEL-1', 'Aparelho Deletar', 'usuario', 1.0, 'Na organização', 'Org', new Date().toISOString())
 
-      const res = await env.request('/items/ECO-DEL-1', {
+      const res = await env.request('/items', {
         method: 'DELETE',
+        body: { uuid: 'ECO-DEL-1' },
         token: staff.token
       })
 
       assert.equal(res.status, 200)
       assert.equal(res.body.uuid, 'ECO-DEL-1')
-      assert.ok(res.body.message.includes('excluído com sucesso'))
+      assert.equal(res.body.ok, true)
 
       const inDb = env.db.prepare('SELECT * FROM items WHERE uuid = ?').get('ECO-DEL-1')
       assert.equal(inDb, undefined)

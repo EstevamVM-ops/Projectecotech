@@ -1,14 +1,93 @@
-import { DatabaseSync } from 'node:sqlite'
+import fs from 'node:fs'
+import path from 'node:path'
+import http from 'node:http'
 import crypto from 'node:crypto'
-import { createServer, initDb, _hashPassword } from '../index.js'
+import { fileURLToPath } from 'node:url'
+
+import constants from '../src/constants.js'
+import db from '../src/database.js'
+import utils from '../src/utils.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ROUTES_DIR = path.join(__dirname, '../src/routes')
+
+let cachedRoutes = null
+
+const loadRoutes = async () => {
+  const routes = []
+  const files = fs.readdirSync(ROUTES_DIR)
+
+  for (const file of files) {
+    if (!file.endsWith('.js')) {
+      continue
+    }
+
+    const filePath = path.join(ROUTES_DIR, file)
+    const routeModule = await import(`file://${filePath}`)
+    const exported = routeModule.default
+
+    if (!exported) {
+      continue
+    }
+
+    if (Array.isArray(exported)) {
+      for (const route of exported) {
+        if (route?.route && route?.method && route?.handler) {
+          routes.push(route)
+        }
+      }
+    } else if (typeof exported === 'object') {
+      if (exported.route && exported.method && exported.handler) {
+        routes.push(exported)
+      }
+    }
+  }
+
+  return routes
+}
+
+const createServer = (routes) => {
+  return http.createServer(async (req, res) => {
+    const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+    const pathname = reqUrl.pathname
+    const method = req.method.toUpperCase()
+
+    utils.setupFunctions(req, res)
+
+    if (method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With'
+      })
+      res.end()
+
+      return;
+    }
+
+    const handlerRoute = routes.find((r) => r.route === pathname && r.method.toUpperCase() === method)
+    if (handlerRoute) {
+      await handlerRoute.handler(req, res)
+
+      return;
+    }
+
+    res.answer(404, { error: 'Not Found' })
+  })
+}
 
 export const createTestEnv = () => {
-  const db = initDb(new DatabaseSync(':memory:'))
-  const server = createServer(db)
+  const sqliteDb = db.db
   let serverInstance = null
   let baseUrl = ''
 
-  const start = () => {
+  const start = async () => {
+    if (!cachedRoutes) {
+      cachedRoutes = await loadRoutes()
+    }
+
+    const server = createServer(cachedRoutes)
+
     return new Promise((resolve) => {
       serverInstance = server.listen(0, '127.0.0.1', () => {
         const port = serverInstance.address().port
@@ -24,25 +103,24 @@ export const createTestEnv = () => {
         serverInstance.close(() => {
           serverInstance = null
           baseUrl = ''
-          try { db.close() } catch {}
           resolve()
         })
       } else {
-        try { db.close() } catch {}
         resolve()
       }
     })
   }
 
   const reset = () => {
-    db.exec('DELETE FROM sessions;')
-    db.exec('DELETE FROM items;')
-    db.exec('DELETE FROM organizations;')
-    db.exec('DELETE FROM users;')
+    sqliteDb.exec('DELETE FROM sessions;')
+    sqliteDb.exec('DELETE FROM items;')
+    sqliteDb.exec('DELETE FROM organizations;')
+    sqliteDb.exec('DELETE FROM users;')
   }
 
   const createUser = ({
-    username = 'user@ecotech.local',
+    email = 'user@ecotech.local',
+    username = null,
     fullName = 'Usuário Teste',
     password = 'password123',
     role = 'user',
@@ -52,19 +130,19 @@ export const createTestEnv = () => {
     permissions = [],
     active = 1
   } = {}) => {
+    const userEmail = username || email
     const salt = crypto.randomBytes(16).toString('hex')
-    const passwordHash = _hashPassword(password, salt)
+    const passwordHash = crypto.pbkdf2Sync(password, salt, constants.HASH_ITERATIONS, constants.KEY_LEN, constants.DIGEST).toString('hex')
 
-    const result = db.prepare(`
-      INSERT INTO users (username, full_name, password_hash, salt, role, admin, permissions, active, organization, grade)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    const result = sqliteDb.prepare(`
+      INSERT INTO users (email, full_name, password_hash, salt, role, permissions, active, organization, grade)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      username,
+      userEmail,
       fullName,
       passwordHash,
       salt,
       role,
-      admin ? 1 : 0,
       JSON.stringify(permissions),
       active ? 1 : 0,
       organization,
@@ -75,15 +153,16 @@ export const createTestEnv = () => {
     const token = crypto.randomBytes(32).toString('hex')
     const createdAt = new Date().toISOString()
 
-    db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, createdAt)
+    sqliteDb.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, createdAt)
 
     return {
       id: userId,
-      username,
+      email: userEmail,
+      username: userEmail,
       fullName,
       password,
       role,
-      admin: Boolean(admin),
+      admin: Boolean(role === 'admin' || admin),
       permissions,
       active: Boolean(active),
       organization,
@@ -156,7 +235,7 @@ export const createTestEnv = () => {
 
     try {
       json = JSON.parse(text)
-    } catch {
+    } catch (err) {
       json = null
     }
 
@@ -169,8 +248,7 @@ export const createTestEnv = () => {
   }
 
   return {
-    db,
-    server,
+    db: sqliteDb,
     start,
     stop,
     reset,
