@@ -1,5 +1,13 @@
 *
 
+!src/
+!src/*
+!src/routes/
+!src/routes/*
+!tools/
+!tools/*
+!tests/
+!tests/*
 !.gitignore
 !index.js
 !create-admin.js
