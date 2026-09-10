@@ -350,14 +350,13 @@ const _deleteOrganization = async (organizationObj, targetBtn) => {
   }
 
   try {
-    const url = id ? `${SERVER_URL}/organizations/${id}` : `${SERVER_URL}/organizations/delete`
-    const res = await globalThis.fetch(url, {
+    const res = await globalThis.fetch(`${SERVER_URL}/organizations`, {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
       },
-      body: JSON.stringify({ id, name })
+      body: JSON.stringify({ id: Number(id) })
     })
 
     const data = await res.json().catch(() => ({}))
@@ -1098,14 +1097,11 @@ if (registerForm) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          full_name: fullName,
           fullName,
-          username: email,
           email,
           organization,
           grade,
-          password,
-          role: 'user'
+          password
         })
       })
 
@@ -1165,7 +1161,7 @@ if (loginForm) {
         method: 'POST',
         mode: 'cors',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: email, password })
+        body: JSON.stringify({ email, password })
       })
 
       if (res.ok) {
@@ -1176,10 +1172,10 @@ if (loginForm) {
           sessionStorage.setItem('authToken', data.token)
         }
 
-        currentUser = data.user || { username: email, full_name: email, admin: false }
+        currentUser = data.user || { email, fullName: email, admin: false }
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser))
 
-        const displayName = currentUser.full_name || currentUser.username
+        const displayName = currentUser.fullName || currentUser.email
 
         if (currentUser.admin || currentUser.role === 'admin') {
           _showToast(`Bem-vindo(a) Administrador(a), ${displayName}!`, 'success')
@@ -1289,7 +1285,7 @@ if (recordForm) {
 
     if (enteredStudent) {
       try {
-        const userCheckRes = await globalThis.fetch(`${SERVER_URL}/users/check?username=${encodeURIComponent(enteredStudent)}`)
+        const userCheckRes = await globalThis.fetch(`${SERVER_URL}/users/check?email=${encodeURIComponent(enteredStudent)}`)
 
         if (!userCheckRes.ok) {
           if (studentInput) {
@@ -1881,12 +1877,13 @@ const _deleteSelectedAccounts = async () => {
 
   for (const id of ids) {
     try {
-      const res = await globalThis.fetch(`${SERVER_URL}/admin/users/${encodeURIComponent(id)}`, {
+      const res = await globalThis.fetch(`${SERVER_URL}/admin/users`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
-        }
+        },
+        body: JSON.stringify({ id: Number(id) })
       })
 
       if (res.ok) deleted += 1
@@ -1938,8 +1935,8 @@ const _renderAccounts = (users) => {
         return `
         <tr>
           <td data-label="Selecionar" class="select-cell">${isSelf ? '' : `<input type="checkbox" class="row-select" data-account-check="${u.id}"${selectedAccountIds.has(u.id) ? ' checked' : ''} aria-label="Selecionar conta" />`}</td>
-          <td data-label="Nome"><strong>${_escapeHtml(u.full_name || u.username)}</strong></td>
-          <td data-label="Usuário">${_escapeHtml(u.username)}</td>
+          <td data-label="Nome"><strong>${_escapeHtml(u.fullName || u.full_name || u.email || u.username)}</strong></td>
+          <td data-label="Usuário">${_escapeHtml(u.email || u.username)}</td>
           <td data-label="Organização">${_escapeHtml(u.organization || '-')}</td>
           <td data-label="Permissões">${u.role === 'staff' && !u.admin ? (u.permissions.length > 0 ? u.permissions.map((p) => _escapeHtml(PERM_LABELS[p] || p)).join(', ') : 'Nenhuma') : '<span class="muted-text">—</span>'}</td>
           <td data-label="Ações" style="text-align: center;">${isSelf ? '<span class="muted-text">Sua conta</span>' : `<button class="button danger" type="button" data-delete-account="${u.id}">Excluir</button>`}</td>
@@ -1984,8 +1981,8 @@ const _renderAccounts = (users) => {
 
       staffTable.innerHTML = pageStaff.map((u) => `
         <tr>
-          <td data-label="Nome"><strong>${_escapeHtml(u.full_name || u.username)}</strong></td>
-          <td data-label="Usuário">${_escapeHtml(u.username)}</td>
+          <td data-label="Nome"><strong>${_escapeHtml(u.fullName || u.full_name || u.email || u.username)}</strong></td>
+          <td data-label="Usuário">${_escapeHtml(u.email || u.username)}</td>
           <td data-label="Permissões">${u.permissions.length > 0 ? u.permissions.map((p) => _escapeHtml(PERM_LABELS[p] || p)).join(', ') : 'Nenhuma'}</td>
           <td data-label="Situação">${u.active ? 'Ativo' : 'Inativo'}</td>
           <td data-label="Ações" style="text-align: center; white-space: nowrap;">
@@ -2041,12 +2038,13 @@ const _deleteAccount = async (id, btn) => {
   if (btn) btn.disabled = true
 
   try {
-    const res = await globalThis.fetch(`${SERVER_URL}/admin/users/${encodeURIComponent(id)}`, {
+    const res = await globalThis.fetch(`${SERVER_URL}/admin/users`, {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
         ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
-      }
+      },
+      body: JSON.stringify({ id: Number(id) })
     })
 
     const data = await res.json().catch(() => ({}))
@@ -2128,13 +2126,13 @@ const _bindAccountTables = () => {
         saveBtn.disabled = true
 
         try {
-          const res = await globalThis.fetch(`${SERVER_URL}/admin/staff/${encodeURIComponent(id)}`, {
+          const res = await globalThis.fetch(`${SERVER_URL}/admin/staff`, {
             method: 'PATCH',
             headers: {
               'Content-Type': 'application/json',
               ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
             },
-            body: JSON.stringify({ permissions: perms, active: activeBox ? activeBox.checked : true })
+            body: JSON.stringify({ id: Number(id), permissions: perms, active: activeBox ? activeBox.checked : true })
           })
 
           const data = await res.json().catch(() => ({}))
@@ -2174,13 +2172,13 @@ const _setItemStatus = async (id, state, selectEl) => {
 
   try {
     const token = sessionStorage.getItem('authToken')
-    const res = await globalThis.fetch(`${SERVER_URL}/items/${encodeURIComponent(id)}`, {
-      method: 'PUT',
+    const res = await globalThis.fetch(`${SERVER_URL}/admin/items/state`, {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
       },
-      body: JSON.stringify({ state })
+      body: JSON.stringify({ uuid: id, state })
     })
 
     const data = await res.json().catch(() => ({}))
@@ -2232,10 +2230,10 @@ const _applyBulkStatus = async () => {
 
   for (const id of Array.from(selectedItemIds)) {
     try {
-      const res = await globalThis.fetch(`${SERVER_URL}/items/${encodeURIComponent(id)}`, {
-        method: 'PUT',
+      const res = await globalThis.fetch(`${SERVER_URL}/admin/items/state`, {
+        method: 'POST',
         headers,
-        body: JSON.stringify({ state })
+        body: JSON.stringify({ uuid: id, state })
       })
 
       if (res.ok) updated += 1
@@ -2285,24 +2283,14 @@ if ($('#deleteSelectedBtn')) {
 
     for (const id of idsToDelete) {
       try {
-        const res = await globalThis.fetch(`${SERVER_URL}/items/${encodeURIComponent(id)}`, {
+        await globalThis.fetch(`${SERVER_URL}/items`, {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-          }
+          },
+          body: JSON.stringify({ uuid: id })
         })
-
-        if (!res.ok) {
-          await globalThis.fetch(`${SERVER_URL}/items/delete`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify({ id })
-          }).catch(() => ({}))
-        }
       } catch (err) {
         console.warn('Error deleting item on server:', err)
       }
@@ -2381,8 +2369,8 @@ if (staffForm) {
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({
-          full_name: $('#staffName') ? $('#staffName').value.trim() : '',
-          username: $('#staffEmail') ? $('#staffEmail').value.trim() : '',
+          fullName: $('#staffName') ? $('#staffName').value.trim() : '',
+          email: $('#staffEmail') ? $('#staffEmail').value.trim() : '',
           password: $('#staffPassword') ? $('#staffPassword').value : '',
           organization: $('#staffOrg') ? $('#staffOrg').value.trim() : '',
           permissions: perms
