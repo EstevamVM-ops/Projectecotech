@@ -22,6 +22,8 @@ db.exec(`
     salt TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     admin INTEGER NOT NULL DEFAULT 0,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    active INTEGER NOT NULL DEFAULT 1,
     organization TEXT NOT NULL DEFAULT '',
     grade TEXT NOT NULL DEFAULT ''
   );
@@ -119,10 +121,51 @@ const _getUserFromReq = (req) => {
   if (parts.length !== 2 || parts[0] !== 'Bearer') return null
 
   const token = parts[1]
-  const stmt = db.prepare('SELECT users.id, users.username, users.full_name, users.role, users.admin, users.organization, users.grade FROM sessions JOIN users ON sessions.user_id = users.id WHERE sessions.token = ?')
+  const stmt = db.prepare('SELECT users.id, users.username, users.full_name, users.role, users.admin, users.organization, users.grade, users.permissions, users.active FROM sessions JOIN users ON sessions.user_id = users.id WHERE sessions.token = ?')
   const user = stmt.get(token)
 
-  return user || null
+  if (!user || user.active === 0) return null
+
+  return user
+}
+
+const STAFF_PERMISSIONS = ['items.view', 'items.create', 'items.status', 'items.delete', 'labels.print', 'reports.pdf', 'organizations.manage']
+
+const _isAdmin = (user) => !!user && (user.role === 'admin' || user.admin === 1)
+
+const _parsePermissions = (value) => {
+  try {
+    const parsed = JSON.parse(value || '[]')
+
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const _hasPermission = (user, perm) => {
+  if (!user) return false
+  if (_isAdmin(user)) return true
+  if (user.active === 0) return false
+  if (user.role === 'staff') return _parsePermissions(user.permissions).includes(perm)
+
+  return perm === 'items.create' || perm === 'items.view'
+}
+
+const _requireAdmin = (user, res) => {
+  if (!user) {
+    _sendJson(res, 401, { error: 'Não autorizado.' })
+
+    return false
+  }
+
+  if (!_isAdmin(user)) {
+    _sendJson(res, 403, { error: 'Acesso restrito a administradores.' })
+
+    return false
+  }
+
+  return true
 }
 
 const _handleRegister = async (req, res) => {
@@ -138,9 +181,8 @@ const _handleRegister = async (req, res) => {
   const password = body.password
   const organization = body.organization || ''
   const grade = body.grade || body.classroom || ''
-  const isAdmin = body.admin === true || body.admin === 1 || body.role === 'admin'
-  const role = isAdmin ? 'admin' : 'user'
-  const adminFlag = isAdmin ? 1 : 0
+  const role = 'user'
+  const adminFlag = 0
 
   if (!fullName) {
     _sendJson(res, 400, { error: 'Nome completo é obrigatório.' })
@@ -203,9 +245,15 @@ const _handleLogin = async (req, res) => {
     return;
   }
 
-  const user = db.prepare('SELECT id, username, full_name, password_hash, salt, role, admin, organization, grade FROM users WHERE username = ?').get(username)
+  const user = db.prepare('SELECT id, username, full_name, password_hash, salt, role, admin, organization, grade, permissions, active FROM users WHERE username = ?').get(username)
   if (!user) {
     _sendJson(res, 401, { error: 'Credenciais inválidas.' })
+
+    return;
+  }
+
+  if (user.active === 0) {
+    _sendJson(res, 403, { error: 'Conta desativada. Fale com um administrador.' })
 
     return;
   }
@@ -232,12 +280,22 @@ const _handleLogin = async (req, res) => {
       role: user.role,
       admin: Boolean(user.admin),
       organization: user.organization || '',
-      grade: user.grade || ''
+      grade: user.grade || '',
+      active: user.active !== 0,
+      permissions: _parsePermissions(user.permissions)
     }
   })
 }
 
 const _handleGetItems = (req, res) => {
+  const user = _getUserFromReq(req)
+
+  if (user && user.role === 'staff' && !_parsePermissions(user.permissions).includes('items.view')) {
+    _sendJson(res, 403, { error: 'Sem permissão para visualizar aparelhos.' })
+
+    return;
+  }
+
   const items = db.prepare(`
     SELECT items.uuid, items.name, items.owner, items.weight, items.state, items.organization, items.created_at AS createdAt,
            COALESCE(NULLIF(users.full_name, ''), items.owner) AS owner_name
@@ -271,7 +329,20 @@ const _handleCheckUser = (req, res, reqUrl) => {
 }
 
 const _handleRegisterOrganization = async (req, res) => {
+  const user = _getUserFromReq(req)
   const body = await _parseJsonBody(req)
+
+  if (!user) {
+    _sendJson(res, 401, { error: 'Não autorizado.' })
+
+    return;
+  }
+
+  if (!_hasPermission(user, 'organizations.manage')) {
+    _sendJson(res, 403, { error: 'Sem permissão para gerenciar organizações.' })
+
+    return;
+  }
 
   if (!body) {
     _sendJson(res, 400, { error: 'Formato JSON inválido.' })
@@ -314,6 +385,20 @@ const _handleRegisterOrganization = async (req, res) => {
 }
 
 const _handleDeleteOrganization = async (req, res, targetIdStr) => {
+  const user = _getUserFromReq(req)
+
+  if (!user) {
+    _sendJson(res, 401, { error: 'Não autorizado.' })
+
+    return;
+  }
+
+  if (!_hasPermission(user, 'organizations.manage')) {
+    _sendJson(res, 403, { error: 'Sem permissão para gerenciar organizações.' })
+
+    return;
+  }
+
   let body = {}
 
   if (req.method === 'DELETE' || req.method === 'POST') {
@@ -360,6 +445,18 @@ const _handleDeleteOrganization = async (req, res, targetIdStr) => {
 const _handleAddItem = async (req, res) => {
   const user = _getUserFromReq(req)
   const body = await _parseJsonBody(req)
+
+  if (!user) {
+    _sendJson(res, 401, { error: 'Não autorizado.' })
+
+    return;
+  }
+
+  if (!_hasPermission(user, 'items.create')) {
+    _sendJson(res, 403, { error: 'Sem permissão para cadastrar aparelhos.' })
+
+    return;
+  }
 
   if (!body) {
     _sendJson(res, 400, { error: 'Formato JSON inválido.' })
@@ -429,8 +526,8 @@ const _handleUpdateState = async (req, res, targetUuid) => {
     return;
   }
 
-  if (user.role !== 'admin' && user.admin !== 1) {
-    _sendJson(res, 403, { error: 'Acesso restrito a administradores.' })
+  if (!_hasPermission(user, 'items.status')) {
+    _sendJson(res, 403, { error: 'Sem permissão para alterar o status.' })
 
     return;
   }
@@ -474,6 +571,20 @@ const _handleUpdateState = async (req, res, targetUuid) => {
 }
 
 const _handleDeleteItem = async (req, res, targetUuidStr) => {
+  const user = _getUserFromReq(req)
+
+  if (!user) {
+    _sendJson(res, 401, { error: 'Não autorizado.' })
+
+    return;
+  }
+
+  if (!_hasPermission(user, 'items.delete')) {
+    _sendJson(res, 403, { error: 'Sem permissão para excluir aparelhos.' })
+
+    return;
+  }
+
   let body = {}
 
   if (req.method === 'DELETE' || req.method === 'POST') {
@@ -503,6 +614,275 @@ const _handleDeleteItem = async (req, res, targetUuidStr) => {
   _sendJson(res, 200, {
     message: `Aparelho "${item.name}" (${uuid}) excluído com sucesso.`,
     uuid
+  })
+}
+
+/* INFO: Account listing + staff management (admin only). */
+const _handleListUsers = (req, res) => {
+  const user = _getUserFromReq(req)
+  if (!_requireAdmin(user, res)) return;
+
+  const rows = db.prepare(`
+    SELECT users.id, users.username, users.full_name, users.role, users.admin, users.organization, users.grade, users.active, users.permissions,
+      (SELECT COUNT(*) FROM items WHERE LOWER(items.owner) = LOWER(users.username) OR LOWER(items.owner) = LOWER(users.full_name)) AS items_count
+    FROM users ORDER BY users.full_name ASC
+  `).all()
+
+  _sendJson(res, 200, {
+    users: rows.map((u) => ({
+      id: u.id,
+      username: u.username,
+      full_name: u.full_name || u.username,
+      role: u.role,
+      admin: Boolean(u.admin),
+      organization: u.organization || '',
+      grade: u.grade || '',
+      active: u.active !== 0,
+      permissions: _parsePermissions(u.permissions),
+      items_count: u.items_count
+    }))
+  })
+}
+
+const _handleCreateStaff = async (req, res) => {
+  const user = _getUserFromReq(req)
+  if (!_requireAdmin(user, res)) return;
+
+  const body = await _parseJsonBody(req)
+  if (!body) {
+    _sendJson(res, 400, { error: 'Formato JSON inválido.' })
+
+    return;
+  }
+
+  const fullName = (body.full_name || body.fullName || '').trim()
+  const username = body.username || body.email
+  const password = body.password
+  const organization = body.organization || ''
+  const permissions = Array.isArray(body.permissions) ? body.permissions : []
+
+  if (!fullName) {
+    _sendJson(res, 400, { error: 'Nome completo é obrigatório.' })
+
+    return;
+  }
+
+  if (!username || typeof username !== 'string' || !password || typeof password !== 'string') {
+    _sendJson(res, 400, { error: 'E-mail e senha são obrigatórios.' })
+
+    return;
+  }
+
+  const invalid = permissions.filter((p) => !STAFF_PERMISSIONS.includes(p))
+
+  if (invalid.length > 0) {
+    _sendJson(res, 400, { error: `Permissões inválidas: ${invalid.join(', ')}.` })
+
+    return;
+  }
+
+  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
+  if (existingUser) {
+    _sendJson(res, 409, { error: 'Este e-mail já está cadastrado.' })
+
+    return;
+  }
+
+  const salt = crypto.randomBytes(16).toString('hex')
+  const passwordHash = _hashPassword(password, salt)
+
+  const result = db.prepare('INSERT INTO users (username, full_name, password_hash, salt, role, admin, organization, grade, permissions, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    username,
+    fullName,
+    passwordHash,
+    salt,
+    'staff',
+    0,
+    organization,
+    '',
+    JSON.stringify(permissions),
+    1
+  )
+
+  _sendJson(res, 201, {
+    message: 'Conta de funcionário criada com sucesso!',
+    id: Number(result.lastInsertRowid),
+    username,
+    full_name: fullName,
+    role: 'staff',
+    organization,
+    permissions
+  })
+}
+
+const _handleUpdateStaff = async (req, res, targetIdStr) => {
+  const user = _getUserFromReq(req)
+  if (!_requireAdmin(user, res)) return;
+
+  const body = await _parseJsonBody(req)
+  if (!body) {
+    _sendJson(res, 400, { error: 'Formato JSON inválido.' })
+
+    return;
+  }
+
+  const target = db.prepare('SELECT id, username, full_name, organization, active, permissions FROM users WHERE id = ?').get(targetIdStr)
+
+  if (!target || db.prepare('SELECT role FROM users WHERE id = ?').get(targetIdStr).role !== 'staff') {
+    _sendJson(res, 404, { error: 'Funcionário não encontrado.' })
+
+    return;
+  }
+
+  const updates = []
+  const params = []
+
+  if (body.full_name !== undefined) {
+    const fullName = String(body.full_name || '').trim()
+
+    if (!fullName) {
+      _sendJson(res, 400, { error: 'Nome completo é obrigatório.' })
+
+      return;
+    }
+
+    updates.push('full_name = ?')
+    params.push(fullName)
+  }
+
+  if (body.organization !== undefined) {
+    updates.push('organization = ?')
+    params.push(String(body.organization || ''))
+  }
+
+  if (body.permissions !== undefined) {
+    if (!Array.isArray(body.permissions)) {
+      _sendJson(res, 400, { error: 'Permissões em formato inválido.' })
+
+      return;
+    }
+
+    const invalid = body.permissions.filter((p) => !STAFF_PERMISSIONS.includes(p))
+
+    if (invalid.length > 0) {
+      _sendJson(res, 400, { error: `Permissões inválidas: ${invalid.join(', ')}.` })
+
+      return;
+    }
+
+    updates.push('permissions = ?')
+    params.push(JSON.stringify(body.permissions))
+  }
+
+  if (body.active !== undefined) {
+    updates.push('active = ?')
+    params.push(body.active ? 1 : 0)
+  }
+
+  if (updates.length === 0) {
+    _sendJson(res, 400, { error: 'Nada para atualizar.' })
+
+    return;
+  }
+
+  params.push(targetIdStr)
+  db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+
+  const updated = db.prepare('SELECT id, username, full_name, role, organization, active, permissions FROM users WHERE id = ?').get(targetIdStr)
+
+  _sendJson(res, 200, {
+    message: 'Funcionário atualizado com sucesso.',
+    id: updated.id,
+    username: updated.username,
+    full_name: updated.full_name,
+    role: updated.role,
+    organization: updated.organization || '',
+    active: updated.active !== 0,
+    permissions: _parsePermissions(updated.permissions)
+  })
+}
+
+const _handleDeleteUser = async (req, res, targetIdStr) => {
+  const user = _getUserFromReq(req)
+  if (!_requireAdmin(user, res)) return;
+
+  let body = {}
+
+  if (req.method === 'DELETE' || req.method === 'POST') {
+    body = (await _parseJsonBody(req)) || {}
+  }
+
+  const targetId = targetIdStr || body.id
+
+  if (!targetId) {
+    _sendJson(res, 400, { error: 'ID da conta é obrigatório.' })
+
+    return;
+  }
+
+  const target = db.prepare('SELECT id, username, full_name, role, admin FROM users WHERE id = ?').get(targetId)
+
+  if (!target) {
+    _sendJson(res, 404, { error: 'Conta não encontrada.' })
+
+    return;
+  }
+
+  if (target.id === user.id) {
+    _sendJson(res, 400, { error: 'Você não pode excluir sua própria conta.' })
+
+    return;
+  }
+
+  if (target.role === 'admin' || target.admin === 1) {
+    const adminCount = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' OR admin = 1").get()
+
+    if (adminCount.count <= 1) {
+      _sendJson(res, 400, { error: 'Não é possível excluir o último administrador.' })
+
+      return;
+    }
+  }
+
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id)
+  db.prepare('DELETE FROM users WHERE id = ?').run(target.id)
+
+  _sendJson(res, 200, {
+    message: `Conta "${target.full_name || target.username}" excluída com sucesso.`,
+    id: target.id
+  })
+}
+
+const _handleBulkDeleteUsers = async (req, res, reqUrl) => {
+  const user = _getUserFromReq(req)
+  if (!_requireAdmin(user, res)) return;
+
+  let body = {}
+
+  if (req.method === 'DELETE' || req.method === 'POST') {
+    body = (await _parseJsonBody(req)) || {}
+  }
+
+  const scope = body.scope || reqUrl.searchParams.get('scope')
+
+  if (scope !== 'users' && scope !== 'staff') {
+    _sendJson(res, 400, { error: 'Informe scope=users ou scope=staff.' })
+
+    return;
+  }
+
+  const targetRole = scope === 'staff' ? 'staff' : 'user'
+  const targets = db.prepare("SELECT id FROM users WHERE role = ? AND admin != 1 AND id != ?").all(targetRole, user.id)
+
+  for (const t of targets) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(t.id)
+    db.prepare('DELETE FROM users WHERE id = ?').run(t.id)
+  }
+
+  _sendJson(res, 200, {
+    message: targets.length === 1 ? '1 conta excluída com sucesso.' : `${targets.length} contas excluídas com sucesso.`,
+    deleted: targets.length,
+    scope
   })
 }
 
@@ -611,6 +991,41 @@ const server = http.createServer(async (req, res) => {
     }
 
     await _handleDeleteItem(req, res, targetId)
+
+    return;
+  }
+
+  /* INFO: Account & staff management routes (admin only). */
+  if (method === 'GET' && (pathname === '/admin/users' || pathname === '/api/admin/users')) {
+    _handleListUsers(req, res)
+
+    return;
+  }
+
+  if (method === 'POST' && (pathname === '/admin/staff' || pathname === '/api/admin/staff')) {
+    await _handleCreateStaff(req, res)
+
+    return;
+  }
+
+  const staffMatch = pathname.match(/^\/(?:api\/)?admin\/staff\/(\d+)$/i)
+
+  if (staffMatch && (method === 'PATCH' || method === 'PUT')) {
+    await _handleUpdateStaff(req, res, staffMatch[1])
+
+    return;
+  }
+
+  const userDeleteMatch = pathname.match(/^\/(?:api\/)?admin\/(?:users|staff)\/(\d+)$/i)
+
+  if (userDeleteMatch && (method === 'DELETE' || method === 'POST')) {
+    await _handleDeleteUser(req, res, userDeleteMatch[1])
+
+    return;
+  }
+
+  if ((method === 'DELETE' || method === 'POST') && (pathname === '/admin/users' || pathname === '/api/admin/users')) {
+    await _handleBulkDeleteUsers(req, res, reqUrl)
 
     return;
   }
